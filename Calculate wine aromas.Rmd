@@ -1,0 +1,143 @@
+---
+title: "Calculate wine aromas"
+author: "Andrea Ballacchino"
+date: "2024-03-20"
+output: html_document
+---
+```{r setup}
+library(dplyr)
+```
+
+# Introduction
+Wine and food pairing is done basing on the matching of aromas of both wine and  food. In particular, the characteristics of wine and food we will focus on are:
+
+* Weight
+* Bitter
+* Acid
+* Salt
+* Piquant
+* Sweet
+* Fat
+
+To each one of the characteristics, we will assign a value from 0 to 4 which will be used to classify the wines/foods.
+
+The values to these parameters for wines are assigned basing on a data set of almost 50,000 reviews by wine experts. After identifying a data set containing all the possible keywords that can be used to classify wines under those characteristics, the occurrences of those keywords in the wine descriptions are counted to assign a numerical value to the 7 aromas.
+At the end of this process, we are able to assign a numerical value to the 7 parameters listed below, which can be displayed in a spider chart and which can be used to compare different wines and pair them with the perfect foods. 
+
+# Preparing Wine Reviews
+The wine reviews are divided into 25 csv file, all contained in the $Wine reviews$ folder. We will open all of them and store them in the same dataset called $reviews$. Since there are thousands of different wines and not all of them have a sufficient amount of reviews to properly assess their taste, we will group them basing on their grape variety as wines with the same grape variety have similar tastes. Moreover, we will only keep those grape varieties which have at least 20 reviews to guarantee the necessary reliability of the reviews. 
+```{r}
+# List all the files containing wine reviewa
+review_files <- list.files("./Datasets/Wine reviews")
+
+# Read each file, group the wines collapsing their description and bind them together to the reviews data frame
+reviews <- data_frame()
+for (file in review_files) {
+  current_reviews <- read.csv(paste("./Datasets/Wine reviews/", file, sep = ""))
+  current_reviews <- current_reviews %>% group_by(Variety, Country) %>% 
+    summarise(count = n(), description = paste(Description, collapse = " ")) %>% 
+    filter(count >= 20) %>% arrange(desc(count))
+  reviews <- rbind(reviews, current_reviews)
+}
+
+# Remove wine varieties that are generic blends and that do not identify a specific wine type
+wines_to_remove <- c("Red Blends, Red Blends", "White Blend", "Bordeaux-style Red Blend", "Provence red blend, Red Blends", "Austrian Red Blend, Red Blends", "Alsace white blend, White Blend", "Austrian white blend, White Blend", "Bordeaux-style White Blend, White Blend")
+reviews <- reviews %>% filter(!(Variety %in% wines_to_remove)) %>% filter(Variety != "")
+
+# All the country values start with an empty space. Remove the empty space at the beginning of country
+reviews$Country <- substr(reviews$Country, 2, 20)
+
+# Standardize the descriptions to facilitate the search for the keywords: convert them to lower case and remove all punctuation
+reviews$description <- tolower(reviews$description)
+reviews$description <- gsub("[.,!?;:]", "", reviews$description)
+reviews$description <- gsub("[-_]", " ", reviews$description)
+
+# Create in the reviews dataframe a column for each classification parameter and set their values to NA
+aromas <- c("weight", "bitter", "fat", "piquant", "salt",  "acid", "sweet")
+for (aroma in aromas) {
+  reviews[[aroma]] <- NA
+} 
+```
+
+# Descriptor Mapping
+The $descriptor_mapping$ dataset contains the list fo all the possible keywords used to describe the above-mentioned parameters. Each keyword refers to one particular parameter and assigns to them a value between low, medium and high. To each keyword we will assign a numerical weight (1 if it is high, 0.5 if it is medium, and -1 if it is low). Those weights will be used to calculate the values for each wine.
+```{r}
+descriptor_mapping <- read.csv("./Datasets/descriptor_mapping_tastes.csv")
+
+# We only care about body and 6 primary tastes: bitter, acid, salt, piquant, sweet, and fat. We can remove rows referring to other tastes and the columns we do not need
+descriptor_mapping <- descriptor_mapping %>% filter(primary.taste != "", primary.taste != "coolness") %>% select(-c("type", "level_1", "level_2", "raw.descriptor"))
+
+# Remove keywords that appear more than once in the dataframe
+descriptor_mapping <- descriptor_mapping[!duplicated(descriptor_mapping[, "level_3"]), ]
+
+# Assign to each keyword a weight basing on its qualitative value (high, medium, or low)
+descriptor_mapping$weight <- 1
+descriptor_mapping$weight[grepl("low", descriptor_mapping$combined) | grepl("light", descriptor_mapping$combined)] <- -1
+descriptor_mapping$weight[grepl("off", descriptor_mapping$combined) | 
+                            grepl("medium", descriptor_mapping$combined) |
+                            descriptor_mapping$combined == "sweet"] <- 0.5
+
+# Standardize the keywords by replacing "-" and "_" with a blank space. This will facilitate the search for keywords in the descriptions later
+descriptor_mapping$level_3 <- gsub("[-_]", " ", descriptor_mapping$level_3)
+
+# Order the descriptor_mapping data frame so that aromas with more than one word are first. This is needed in a later step of the process, as we will need to check the presence of two-word descriptors in the description before one-word descriptors
+number_of_spaces <- gregexpr(" ", descriptor_mapping$level_3)
+for (i in 1:length(number_of_spaces)) {
+  number_of_spaces[[i]] <- number_of_spaces[[i]][1] 
+}
+number_of_spaces <- unlist(number_of_spaces)
+descriptor_mapping <- descriptor_mapping[order(number_of_spaces, decreasing = TRUE), ]
+```
+
+# Assigning Numerical Values to the Parameters
+We now need to assign numerical values to the parameters for each wine group. This is done by counting the number of keywords for each parameter in the wine descriptions and muliplying them by the weight of each keyword. Since different wine groups have different numbers of reviews, the values obtained will be divided by the number of reviews for each wine group as to insure fairness and comparability. Lastly, the values of the parameters will be re-scaled to take on values from 0 to 4.
+```{r}
+# Iterate through each wine group
+for (n in 1:nrow(reviews)) {
+  review <- reviews[n, ]
+  
+  # Iterate through each keyword
+  for (i in 1:nrow(descriptor_mapping)) {
+    keyword <- descriptor_mapping[i, "level_3"]
+    current_description <- review$description
+  
+    # Store in a variable all the occurrences of the keyword in the description
+    occurrences <- gregexpr(keyword, current_description)[[1]]
+    
+    # If the word is not found in the description, skip to next iteration
+    if (occurrences[1] == -1) {
+      next
+    }
+    
+    aroma <- descriptor_mapping[i, "primary.taste"]
+    weight <- descriptor_mapping[i, "weight"]
+    
+    # Remove the keyword from the description so that it is not counted twice in the next iterations as there are words that are repeated in different descriptor_mappings (e.g. dry and off-dry)
+    review$description <- gsub(keyword, "", current_description)
+    
+    # Count the number of occurrences of the keyword in the description
+    count <- length(occurrences)
+    
+    # Multiply the number of occurrences of the keyword with its weight
+    count <- count * weight
+    
+    # If the value of the aroma in the review is NA, set it to the obtained count. If it not NA add to it the obtained count
+    reviews[n, aroma] <- ifelse(is.na(reviews[n, aroma]), count, reviews[n, aroma] + count)
+  }
+}
+
+# Replace the NA values with 0
+reviews[, aromas][is.na(reviews[, aromas])] <- 0
+
+# Calculate the relative frequency of every aroma
+reviews[, aromas] <- apply(reviews[, aromas], 2, function(x) {return(x / reviews$count)})
+
+# Remove the description column as it is not needed anymore
+reviews <- reviews %>% select(-description)
+
+# Rescale each parameter so that it takes on values from 0 to 4
+reviews[, aromas] <- apply(reviews[, aromas], 2, function(x) {return((x - min(x)) / (max(x) - min(x)) * 4)})
+
+# Save the data frame in a csv file
+write.csv(reviews, "./Datasets/classified wines.csv", row.names=FALSE)
+```

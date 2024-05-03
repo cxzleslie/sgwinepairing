@@ -1,0 +1,156 @@
+---
+title: "wine data"
+author: "jordon"
+date: "2024-03-17"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+functions to scrape using read html
+```{r}
+# Load necessary libraries
+library(rvest)
+library(dplyr)
+library(furrr)  # For parallel processing
+
+# Function to scrape product URLs from a given page
+scrape_product_urls <- function(page_url) {
+  page <- read_html(page_url)
+  product_urls <- page %>%
+    html_nodes(".product-title a") %>%
+    html_attr("href")
+  return(product_urls)
+}
+
+# Function to scrape product details from a given product page
+scrape_product_details <- function(product_url) {
+  Sys.sleep(0.5)  # Adjust delay as needed
+  product_page <- read_html(product_url)
+  product_name <- product_page %>%
+    html_node(".entry-title") %>%
+    html_text() %>%
+    trimws()
+  product_price <- product_page %>%
+    html_node(".amount") %>%
+    html_text() %>%
+    trimws()
+  product_reviews <- product_page %>%
+    html_node("#tab-description") %>%
+    html_text() %>%
+    trimws()
+  
+  product_details_labels <- product_page %>%
+    html_nodes(".woocommerce-product-attributes-item__label") %>%
+    html_text() %>%
+    trimws()
+  
+  product_details_values <- product_page %>%
+    html_nodes(".woocommerce-product-attributes-item__value p") %>%
+    html_text() %>%
+    trimws()
+  
+  # Check if the lengths of labels and values match
+  if (length(product_details_labels) != length(product_details_values)) {
+    cat("Error: Lengths of labels and values do not match for URL:", product_url, "\n")
+    return(NULL)
+  }
+  
+  # Combine additional details into a named list
+  additional_details <- setNames(product_details_values, product_details_labels)
+  
+  # Create a data frame with the extracted information
+  product_data <- data.frame(
+    Name = product_name,
+    Price = product_price,
+    Reviews = product_reviews,
+    t(additional_details),  # Transpose additional details to match dataframe structure
+    stringsAsFactors = FALSE
+  )
+  
+  return(product_data)
+}
+
+# Scrape product data from a list of URLs using parallel processing
+scrape_product_data <- function(product_urls) {
+  plan(multisession)  # Use multiple cores for parallel processing
+  product_data_list <- future_map(product_urls, ~ scrape_product_details(.x))
+  return(product_data_list)
+}
+```
+
+scrape for pages 51 to 55
+```{r}
+
+# Record start time
+start_time <- Sys.time()
+
+# Base URL of the website
+base_url <- "https://www.1855thebottleshop.com/product-category/all-products/wine/"
+
+# Get product URLs from all pages
+all_product_urls <- list()
+for (page_num in 51:55) {
+  page_url <- paste0(base_url, "page/", page_num, "/")
+  product_urls <- scrape_product_urls(page_url)
+  all_product_urls <- c(all_product_urls, product_urls)
+}
+
+# Scrape product data
+product_data_list <- scrape_product_data(all_product_urls)
+
+# Ensure all data frames have the same structure
+all_detail_labels <- unique(unlist(lapply(product_data_list, names)))
+
+align_additional_details <- function(product_data) {
+  missing_labels <- setdiff(all_detail_labels, names(product_data))
+  for (label in missing_labels) {
+    product_data[[label]] <- NA
+  }
+  return(product_data)
+}
+
+product_data_list <- lapply(product_data_list, align_additional_details)
+
+# Combine all data frames into one
+all_product_data5 <- bind_rows(product_data_list)
+
+# Record end time
+end_time <- Sys.time()
+
+# Calculate time taken
+time_taken <- end_time - start_time
+cat("Time taken for scraping:", time_taken, "\n")
+
+
+```
+
+Write csv file
+```{r}
+# Define the file path where you want to save the CSV file
+csv_file <- "winescrape6.csv"
+
+# Write the dataset to a CSV file
+write.csv(all_product_data5, file = csv_file, row.names = FALSE)
+
+# Print a message indicating that the data has been saved
+cat("Dataset has been saved to", csv_file, "\n")
+```
+
+Combine all my sub datasets into one
+```{r}
+# Define file paths for the CSV files
+csv_files <- c("winescrape1.csv", "winescrape2.csv", "winescrape3.csv", "winescrape4.csv", "winescrape5.csv", "winescrape6.csv")
+
+# Read each CSV file into a separate data frame
+data_frames <- lapply(csv_files, read.csv)
+
+# Combine all data frames into one
+combined_data <- bind_rows(data_frames)
+
+# Write the combined data frame to a new CSV file
+write.csv(combined_data, file = "./Datasets/1855thebottleshop.csv", row.names = FALSE)
+```
+

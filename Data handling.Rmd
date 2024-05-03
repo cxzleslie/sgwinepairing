@@ -1,0 +1,247 @@
+---
+title: "Data Handling"
+author: "Andrea Ballacchino"
+date: "2024-03-27"
+output: html_document
+---
+```{r setup}
+library(dplyr)
+```
+# Clean the dataset from Wine.Delivery
+```{r}
+winedelivery <- read.csv("./Datasets/winedelivery.csv")
+
+# Create three new columns to store wether the wine is organic, vegan and/or sparkling
+winedelivery$organic <- NA
+winedelivery$vegan <- NA
+winedelivery$sparkling <- NA
+
+# Set the values to the columns organic, vegan and sparkling
+winedelivery$organic <- as.factor(ifelse(grepl("Organic", winedelivery$type), "organic", "non-organic"))
+winedelivery$vegan <- as.factor(ifelse(grepl("Vegan Wine", winedelivery$type), "vegan", "non-vegan"))
+winedelivery$sparkling <- as.factor(ifelse(grepl("Sparkling Wine", winedelivery$type), "sparkling", "still"))
+
+# Remove the words "Organic", "Vegan Wine", and "Sparkling Wine" from the type column
+winedelivery$type <- gsub("Organic", "", winedelivery$type)
+winedelivery$type <- gsub("Vegan Wine", "", winedelivery$type)
+winedelivery$type <- gsub("Sparkling Wine", "", winedelivery$type)
+
+# Remove non-alcoholic from the type column as we don't need it (it is the same as alcohol == 0)
+winedelivery$type <- gsub("Non-Alcoholic", "", winedelivery$type)
+
+# Remove all commas from type column and turn the column to factor
+winedelivery$type <- gsub(",", "", winedelivery$type)
+
+# If the type column contains red wine or white wine, keep only red wine or white wine and remove any other character
+winedelivery$type[grepl("Red Wine", winedelivery$type)] <- "Red Wine"
+winedelivery$type[grepl("White Wine", winedelivery$type)] <- "White Wine"
+
+# If the grape vairety contains the word champagne, record champagne as type
+winedelivery$type[grepl("Champagne", winedelivery$variety)] <- "Champagne"
+
+# Turn the column to factor data type
+winedelivery$type <- as.factor(winedelivery$type)
+
+# Create a column storing the website the wine is from
+winedelivery$website <- "wine.delivery"
+
+# Create column for storing the link to the wine page
+winedelivery$link <- paste("https://wine.delivery/product/", winedelivery$items.sku, sep = "")
+
+# Remove columns we do not need
+winedelivery <- winedelivery %>% select(-c("items.id", "items.attribute_set_id", "items.status", "items.visibility", "items.type_id", "items.created_at", "items.updated_at", "items.weight", "country.x", "region.x", "grape_varieties", "items.sku")) 
+```
+
+# Clean the dataset from 1855thebottleshop
+```{r}
+bottleshop <- read.csv("./Datasets/1855thebottleshop.csv")
+
+# Create column for Sparkling wine
+bottleshop$sparkling <- NA
+
+# Classify wines either as sparkling or still
+bottleshop$sparkling <- as.factor(ifelse(grepl("Sparkling Wine", bottleshop$Product.Type), "sparkling", "still"))
+
+# Remove unnecessary strings from type column and turn it into factor
+bottleshop$Product.Type <- gsub(", Port", "", bottleshop$Product.Type)
+bottleshop$Product.Type <- gsub(", Sparkling Wine", "", bottleshop$Product.Type)
+bottleshop$Product.Type <- gsub("Sparkling Wine", "", bottleshop$Product.Type)
+bottleshop$Product.Type <- as.factor(bottleshop$Product.Type)
+
+# Get rid of rows with empty names
+bottleshop <- bottleshop %>% filter(!is.na(Name))
+rownames(bottleshop) <- 1:nrow(bottleshop)
+
+# Clean name column
+bottleshop$bottle_size <- NA
+bottleshop$year <- NA
+for (i in 1:nrow(bottleshop)) {
+  
+  # The name column contains data, which is already contained in other columns. Get rid of everything that comes after "ml"
+  index <- regexpr("ml", bottleshop$Name[i])[1]
+  bottleshop[i, "Name"] <- ifelse(index == -1, bottleshop[i, "Name"], (substr(bottleshop$Name[i], 1, index - 1)))
+  
+  # Find the bottle size in the name and move it to the bottle_size column
+  spaces <- gregexpr(" ", bottleshop$Name[i])[[1]]
+  last_space <- spaces[length(spaces)]
+  bottleshop[i, "bottle_size"] <- substr(bottleshop$Name[i], last_space + 1, nchar(bottleshop$Name[i]))
+  
+  # Find the year in the name and move it to the year column
+  second_to_last_space <- spaces[length(spaces) - 1]
+  bottleshop[i, "year"] <- substr(bottleshop$Name[i], second_to_last_space + 1, last_space - 1)
+  
+  # Remove year and bottle size from name
+  bottleshop[i, "Name"] <- substr(bottleshop$Name[i], 1, second_to_last_space - 1)
+}
+
+# Remove the wines that got unusual results for size and year
+bottleshop <- bottleshop[(nchar(bottleshop$year) == 2) | (nchar(bottleshop$year) == 4) & (bottleshop$year != "Maya") & (bottleshop$year != "MV18"),]
+
+# Remove $ and S from price and turn it into a number
+bottleshop$Price <- as.numeric(gsub("[S$,]", "", bottleshop$Price))
+
+# Remove country code from region
+bottleshop$Region <- substr(bottleshop$Region, 1, nchar(bottleshop$Region) - 3)
+
+# Remove unecessary columns
+bottleshop <- bottleshop %>% select(-c("Vintage", "Appellation", "Sweetness", "Volume"))
+
+# Create column for storing the website
+bottleshop$website <- "1855thebottleshop"
+
+# Create column for storing the link to the wine page
+bottleshop$link <- paste(gsub("[ ]", "-",bottleshop$Name), bottleshop$year, sep = "-")
+bottleshop$link <- paste("https://www.1855thebottleshop.com/product/", bottleshop$link, sep = "")
+```
+
+# Rbind the datasets
+```{r}
+# Rename columns of both data frames so that they match
+colnames(winedelivery) <- c("name", "year", "price", "description", "short_description", "type", "producer", "bottle_size", "alcohol", "grape_variety", "region", "country", "organic", "vegan", "sparkling", "website", "link")
+colnames(bottleshop) <- c("name", "price", "description", "type", "producer", "country", "region", "grape_variety", "maturity", "rating", "sparkling", "bottle_size", "year", "website", "link")
+
+# Assign NA value to missing columns in both data frames
+all_columns <- unique(c(colnames(bottleshop), colnames(winedelivery)))
+winedelivery[setdiff(all_columns, colnames(winedelivery))] <- NA
+bottleshop[setdiff(all_columns, colnames(bottleshop))] <- NA
+
+# Rbind the data frames
+wines <- rbind(winedelivery, bottleshop)
+
+# Order the columns
+wines <- wines %>% select("name", "price", "description", "short_description", "rating", "type", "grape_variety", "country", "region", "producer", "year", "bottle_size", "maturity", "alcohol", "organic", "vegan", "sparkling", "website", "link")
+
+# Replace empty values with NA
+wines$type[wines$type == ""] <- NA
+
+# Replace United States with USA in country column and turn it into factor
+wines$country[wines$country == "United States"] <- "USA"
+wines$country <- as.factor(wines$country)
+
+# Fix region column
+wines$region[wines$region == "Andalucia"] <- "Andalusia"
+wines$region[wines$region == "Beaujolais "] <- "Beaujolais"
+wines$region[wines$region == "Casablanca "] <- "Casablanca"
+wines$region[wines$region == "Castilla Y Leon" | wines$region == "Castile and Leon"] <- "Castilla y Leon"
+wines$region[wines$region == "Castile-La Mancha"] <- "Castilla-La Mancha"
+wines$region[wines$region == "Catalonia"] <- "Catalunya"
+wines$region[wines$region == "Friuli-Venzia Giulia"] <- "Friuli-Venezia Giulia"
+wines$region[wines$region == "Hawkes Bay"] <- "Hawke's Bay"
+wines$region[wines$region == "Mendoza Province"] <- "Mendoza"
+wines$region[wines$region == "Tokay"] <- "Tokaj"
+wines$region <- as.factor(wines$region)
+
+# Turn columns into factors
+wines$website <- as.factor(wines$website)
+wines$maturity <- as.factor(wines$maturity)
+
+# Create price category column
+wines$price_category <- cut(wines$price, breaks = c(15, 25, 50, 75, 100, 150, 250, 500, 1000, Inf), labels = c("15-25$", "26-50$", "51-75$", "76-100$", "101-150$", "151-250$", "251-500$", "501-1000$", "1001$+"), include.lowest = T)
+```
+
+# Merge Data frames
+```{r}
+classified_wines <- read.csv("./Datasets/classified wines.csv")
+
+# Fix all the varieties that have slightly different names in different data frames
+wines$grape_variety <- gsub("Syrah/ Shiraz", "Syrah", wines$grape_variety)
+wines$grape_variety <- gsub("Shiraz", "Syrah", wines$grape_variety)
+classified_wines$Variety <- gsub("Shiraz", "Syrah", classified_wines$Variety)
+wines$grape_variety <- gsub("Grenache/ Garnacha", "Grenache", wines$grape_variety)
+classified_wines$Variety <- gsub("Garnacha, Grenache", "Grenache", classified_wines$Variety)
+classified_wines$Variety <- gsub("Pinot Nero, Pinot Noir", "Pinot Noir", classified_wines$Variety)
+classified_wines$Variety <- gsub("Pinot Grigio", "Pinot Gris", classified_wines$Variety)
+wines$grape_variety <- gsub("Pinot Gris/ Grigio", "Pinot Gris", wines$grape_variety)
+wines$grape_variety <- gsub("Pinot Grigio", "Pinot Gris", wines$grape_variety)
+classified_wines$Variety <- gsub(", Italian Red", "", classified_wines$Variety)
+classified_wines$Variety <- gsub(", Italian White", "", classified_wines$Variety)
+classified_wines$Variety <- gsub("Cannonau, Grenache", "Grenace", classified_wines$Variety)
+wines$grape_variety <- gsub("Cannonau", "Grenace", wines$grape_variety)
+
+# Change US to USA in country column
+classified_wines$Country[classified_wines$Country == "US"] <- "USA"
+
+# Merge data frames
+wines <- merge(wines, classified_wines, by.x = c("grape_variety", "country"), by.y = c("Variety", "Country"), all.x = T)
+
+# There are some wines that contain more than one variety. Their aroma values will be calculated as the average of the aroma values of all their varieties
+for (i in 1:nrow(wines)) {
+  if (grepl(",", wines$grape_variety[i])) {
+    
+    # Get all the varieties of the wine
+    varieties <- strsplit(wines[i, "grape_variety"], ", ")[[1]]
+    varieties_df <- data.frame()
+    
+    # Iterate through every variety
+    for (variety in varieties) {
+      
+      # Find for the match of variety and country in the classified_wines data frame
+      variety <- classified_wines[classified_wines$Variety == variety & classified_wines$Country == wines[i, "country"], ]
+      variety <- variety %>% select("weight", "bitter", "fat", "piquant", "salt", "acid", "sweet")
+      
+      # If such match exists, add the variety's aroma values to the varieties_df data frame
+      if (nrow(variety) == 1) {
+        varieties_df <- rbind(varieties_df, variety)
+      }
+    }
+    
+    # If at least one match has been found, assign to the aromas of the wine the average of those of its varieties
+    if (nrow(varieties_df) > 0) {
+      wines[i, c("weight", "bitter", "fat", "piquant", "salt", "acid", "sweet")] <-apply(varieties_df, 2, mean)
+    }
+  }
+}
+
+# Create column for price category
+wines$price_category <- factor(wines$price_category, levels = c("15-25$", "26-50$", "51-75$", "76-100$", "101-150$", "151-250$", "251-500$", "501-1000$", "1001$+"))
+
+# Change NV with NA in year column
+wines$year[wines$year == "NV"] <- NA
+
+# Turn year into numeric
+wines$year <- as.numeric(wines$year)
+
+# Turn empty descriptions to NA
+wines$description[wines$description == " " | wines$description == "\n" | wines$description == "\n\n"] <- NA
+
+# Remove duplicates
+wines <- wines %>% distinct(name, .keep_all = T)
+
+# Add ID column
+wines$id <- paste("wine", as.character(row.names(wines)), sep = "")
+
+# Open the dataset containing the coordinates of the regions in the wines dataframe. Such coordinates have been found using the google maps API
+coordinates <- read.csv("./Datasets/coordinates.csv")
+coordinates$country[coordinates$country == "United States of America"] <- "USA"
+
+# Merge wines dataframe with coordinates dataframe
+wines <- merge(wines, coordinates, by = c("country", "region"))
+```
+
+# Save the dataset
+```{r}
+write.csv(wines, "./Datasets/wines.csv", row.names=FALSE)
+```
+
+
+

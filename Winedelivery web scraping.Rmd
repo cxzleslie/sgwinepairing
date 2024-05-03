@@ -1,0 +1,113 @@
+---
+title: "Wine.delivery data"
+author: "Andrea Ballacchino"
+date: "2024-03-08"
+output: html_document
+---
+
+This file is to get data about more than 2000 wines, including their price in Singapore, from the website wine.delivery
+```{r}
+library(jsonlite)
+library(dplyr)
+
+# Create an empty data frame
+wines <- data.frame()
+
+# A maximum of 100 wines can be retrieved with a single API call, therefore we need to perform 22 calls in order to retreive data about all the available wines
+for (i in 1:24) {
+  # Get the api URL
+  url <- paste("https://wine.delivery/production/rest/V1/wd/products/search?wine[sort]=-updated_date&wine[q]=*&wine[currentPage]=", i, "&wine[pageSize]=100&", sep = "")
+
+  # Read JSON
+  data <- fromJSON(url)
+  
+  # Turn the items into a data frame
+  cleaned_data <- as.data.frame(data["items"])
+  
+  # Set the names of the additional attributes to extract
+  attributes_names <- c("description", "short_description", "type", "producer", "grape_varieties", "vintage_year", "bottle_size", "alcohol", "country", "region", "bottle_size")
+  
+  # Create an empty data frame with the additional attributes to extract as columns
+  attributes_df <- data.frame(matrix(ncol = length(attributes_names), nrow = 0))
+  colnames(attributes_df) <- attributes_names
+  
+  # Run a for loop for every item 
+  for (i in 1:nrow(cleaned_data)) {
+    
+    # Get the additional attributes of the current item and turn them into a data frame
+    wine_attributes <- cleaned_data$items.custom_attributes[[i]]
+    wine_attributes <- as.data.frame(t(wine_attributes))
+    colnames(wine_attributes) <- wine_attributes[1, ]
+    wine_attributes <- wine_attributes[2, ] 
+    
+    # Set the missing values as NA
+    for (col in setdiff(attributes_names, colnames(wine_attributes))) {
+      wine_attributes[,col] <- NA
+    }
+    
+    # Select only the additional attributes we are interested in
+    wine_attributes <- wine_attributes %>% select(all_of(attributes_names))
+    
+    # Bind the additional attributes of the current item to the data frame with the additional attributes of all the items
+    attributes_df <- rbind(attributes_df, wine_attributes)
+  }
+  
+  # Bind the columns with the additional attributes to the data frame with all the data about wines
+  cleaned_data <- cbind(cleaned_data, attributes_df)
+  
+  # Remove columns we do not need
+  cleaned_data <- cleaned_data %>% select(-c(items.product_links, items.tier_prices, items.custom_attributes, items.extension_attributes))
+    
+  # Add the wines of the current page to the data frame with all the wines
+  wines <- rbind(wines, cleaned_data)
+  
+  # Add time interval to avoid overloading the website
+  Sys.sleep(5)
+}
+```
+
+From the previous scrape there are four columns (grape_variety, type, country, and region) which have numerical values that cannot be converted to character values. Another web scraping has been done to get those values from the same website
+```{r}
+# Open the dataset containing the scraped data
+scraped_info <-read.csv("./Datasets/grape variety winedelivery.csv")
+
+# Remove the year from the name and save it a new column
+scraped_info$year <- NA
+for (i in 1:nrow(scraped_info)) {
+  
+  # Find the year that is written as last word of the name
+  spaces <- gregexpr(" ", scraped_info$name[i])[[1]]
+  last_space <- spaces[length(spaces)]
+
+  # Assign the year to its designated column
+  scraped_info[i, "year"] <- substr(scraped_info$name[i], last_space + 1 , nchar(scraped_info$name[i]))
+  
+  # Remove the year from the name
+  scraped_info[i, "name"] <- substr(scraped_info$name[i], 1, last_space - 1)
+}
+
+# In the wines dataset, turn the 0s for the year into NV (like it is in the scraped_info dataset)
+wines$vintage_year[wines$vintage_year == "0"] <- "NV"
+
+# Merge the two datasets by name and year
+wines <- merge(wines, scraped_info, by.x = c("items.name", "vintage_year"), by.y = c("name", "year"))
+
+# Remove country and region column
+wines <- wines %>% rename("country" = "country.y") %>% rename("region" = "region.y")
+
+# Remove rows containing 1015 as type because they are spirits
+wines <- wines[!grepl("1015", wines$type), ]
+
+# Replace type numeric values with their character value
+wines$type <- gsub("223", "Red Wine", wines$type)
+wines$type <- gsub("224", "White Wine", wines$type)
+wines$type <- gsub("229", "Sweet and Fortified Wine", wines$type)
+wines$type <- gsub("1016", "Rose Wine", wines$type)
+wines$type <- gsub("1017", "Sparkling Wine", wines$type)
+wines$type <- gsub("1042", "Organic", wines$type)
+wines$type <- gsub("5874", "Vegan Wine", wines$type)
+wines$type <- gsub("5908", "Non-Alcoholic", wines$type)
+
+# Save the data frame in a csv file
+write.csv(wines, "./Datasets/winedelivery.csv", row.names=FALSE)
+```
